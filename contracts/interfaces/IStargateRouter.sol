@@ -16,7 +16,7 @@ interface IStargateRouter {
         address payable _refundAddress,
         uint256 _amountLD,
         uint256 _minAmountLD,
-        lzTxObj memory _lzTxParams,
+        lzTxObj calldata _lzTxParams,
         bytes calldata _to,
         bytes calldata _payload
     ) external payable;

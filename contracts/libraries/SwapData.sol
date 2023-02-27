@@ -16,6 +16,7 @@ library Type {
     struct SrcData {
         uint16 poolId;
         uint8 slippage;
+        uint256 amountIn;
         uint256 amountOutMin;
         uint256 fee;
     }

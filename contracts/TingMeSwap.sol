@@ -8,21 +8,24 @@ import "./access/Ownable.sol";
 import "./security/Pausable.sol";
 import "hardhat/console.sol";
 import "./libraries/SwapData.sol";
+import "./libraries/BytesLib.sol";
 
 /// This contract combines 1Inch and Stargate
 contract TingMeSwap is Ownable, Pausable {
-    // Properties
+    // Constants
     address constant Native = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
     uint256 constant MILLION = 10**6;
+
+    // Variables
+    address vault;
+    uint256 crosschainSwapFee; // tingme fees (per 1,000,000)
     IAggregationRouterV5 swapRouter; // 1Inch router address
     IStargateRouter stgRouter; // StarGate router
-    uint256 crosschainSwapFee; // tingme fees (per 1,000,000)
-    address vault;
     mapping(uint16 => IERC20) public poolToToken;
     mapping(uint256 => bool) private isProcessed;
 
     // Events
-    event Received(address token, uint256 amount);
+    event Received(address indexed token, uint256 indexed amount);
 
     //
     constructor(
@@ -89,12 +92,12 @@ contract TingMeSwap is Ownable, Pausable {
         _pause();
     }
 
-    function _removeSign(bytes calldata data)
+    function _removeFunctionSelector(bytes memory data)
         internal
         pure
         returns (bytes memory)
     {
-        return data[4:];
+        return BytesLib.slice(data, 4, data.length - 4);
     }
 
     // Logic functions //
@@ -109,7 +112,7 @@ contract TingMeSwap is Ownable, Pausable {
             bytes memory permit,
             bytes memory data
         ) = abi.decode(
-                _removeSign(_data),
+                _removeFunctionSelector(_data),
                 (IAggregationExecutor, Type.SwapDescription, bytes, bytes)
             );
         (uint256 returnAmount, ) = swapRouter.swap{value: msg.value}(
@@ -128,31 +131,53 @@ contract TingMeSwap is Ownable, Pausable {
     }
 
     function swapCrosschain(
-        Type.SrcData memory srcData,
-        Type.DstData memory dstData,
+        Type.SrcData calldata srcData,
+        Type.DstData calldata dstData,
         bytes calldata srcCallSwapData,
         bytes calldata dstCallSwapData
     ) external payable whenNotPaused {
-        if (srcCallSwapData.length == 0) {
-            _swapCrosschainWithPoolToken(dstCallSwapData);
-        } else {
-            _swapCrosschainWithOtherToken(
-                srcData,
-                dstData,
-                srcCallSwapData,
-                dstCallSwapData
+        uint256 returnAmount = _preCrosschainProcess(srcData, srcCallSwapData);
+        // approve pool token
+        {
+            poolToToken[srcData.poolId].approve(
+                address(stgRouter),
+                returnAmount
             );
         }
+
+        bytes memory data = abi.encode(
+            dstData.to,
+            dstData.slippage,
+            dstCallSwapData
+        );
+
+        stgRouter.swap{value: srcData.fee}(
+            dstData.chainId,
+            srcData.poolId,
+            dstData.poolId,
+            payable(msg.sender),
+            returnAmount,
+            (returnAmount * srcData.slippage) / 100,
+            IStargateRouter.lzTxObj(dstData.dstFee, 0, "0x"),
+            abi.encodePacked(dstData.dstContract),
+            data
+        );
     }
 
-    function _swapCrosschainWithPoolToken(bytes calldata dstData) internal {}
-
-    function _preCroschainProcess(
-        Type.SrcData memory srcData,
+    function _preCrosschainProcess(
+        Type.SrcData calldata srcData,
         bytes calldata srcCallSwapData
     ) internal returns (uint256) {
+        if (srcCallSwapData.length == 0) {
+            // use pool token
+            poolToToken[srcData.poolId].transferFrom(
+                msg.sender,
+                address(this),
+                srcData.amountIn
+            );
+            return srcData.amountIn;
+        }
         // Decode data, ignore permit //
-
         (
             IAggregationExecutor srcExecutor,
             Type.SwapDescription memory srcDesc,
@@ -202,40 +227,6 @@ contract TingMeSwap is Ownable, Pausable {
         return returnAmount;
     }
 
-    function _swapCrosschainWithOtherToken(
-        Type.SrcData memory srcData,
-        Type.DstData memory dstData,
-        bytes calldata srcCallSwapData,
-        bytes calldata dstCallSwapData
-    ) internal {
-        uint256 returnAmount = _preCroschainProcess(srcData, srcCallSwapData);
-
-        // approve pool token
-        {
-            poolToToken[srcData.poolId].approve(
-                address(stgRouter),
-                returnAmount
-            );
-        }
-
-        bytes memory data = abi.encode(
-            dstData.to,
-            dstData.slippage,
-            dstCallSwapData
-        );
-        stgRouter.swap{value: srcData.fee}(
-            dstData.chainId,
-            srcData.poolId,
-            dstData.poolId,
-            payable(msg.sender),
-            returnAmount,
-            (returnAmount * srcData.slippage) / 100,
-            IStargateRouter.lzTxObj(dstData.dstFee, 0, "0x"),
-            abi.encodePacked(dstData.dstContract),
-            data
-        );
-    }
-
     /// @param chainId The remote chainId sending the tokens
     /// @param srcAddress The remote Bridge address
     /// @param nonce: The message ordering nonce
@@ -244,11 +235,11 @@ contract TingMeSwap is Ownable, Pausable {
     /// @param payload: The swap call data in bytes
     function sgReceive(
         uint16 chainId,
-        bytes memory srcAddress,
+        bytes calldata srcAddress,
         uint256 nonce,
         address token,
         uint256 amount,
-        bytes memory payload
+        bytes calldata payload
     ) external payable {
         require(
             msg.sender == address(stgRouter),
@@ -276,20 +267,13 @@ contract TingMeSwap is Ownable, Pausable {
         } else {
             // decode data
             (
-                ,
                 IAggregationExecutor executor,
                 Type.SwapDescription memory desc,
                 ,
                 bytes memory executeData
             ) = abi.decode(
-                    callSwapData,
-                    (
-                        bytes4, //function hash
-                        IAggregationExecutor,
-                        Type.SwapDescription,
-                        bytes,
-                        bytes
-                    )
+                    _removeFunctionSelector(callSwapData),
+                    (IAggregationExecutor, Type.SwapDescription, bytes, bytes)
                 );
             // if wrong dstData -> transfer pool token to receiver
             if (address(desc.srcToken) != token) {
