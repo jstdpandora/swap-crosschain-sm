@@ -74,12 +74,9 @@ contract TingMeSwap is Ownable, Pausable {
         token.transfer(payable(msg.sender), amount);
     }
 
-    function widthdraw() external onlyOwner {
-        payable(msg.sender).transfer(address(this).balance);
-    }
-
-    function destroy() external onlyOwner {
-        selfdestruct(payable(msg.sender));
+    function widthdraw(uint256 amount) external onlyOwner {
+        require(amount <= address(this).balance, "Not enough funds");
+        payable(msg.sender).transfer(amount);
     }
 
     receive() external payable {}
@@ -115,12 +112,19 @@ contract TingMeSwap is Ownable, Pausable {
                 _removeFunctionSelector(_data),
                 (IAggregationExecutor, Type.SwapDescription, bytes, bytes)
             );
+        // EIP-20 token -> transfer and approve
+        if (address(desc.srcToken) != Native) {
+            desc.srcToken.transferFrom(msg.sender, address(this), desc.amount);
+            desc.srcToken.approve(address(swapRouter), desc.amount);
+        }
+        // 1InchSwap
         (uint256 returnAmount, ) = swapRouter.swap{value: msg.value}(
             executor,
             desc,
             permit,
             data
         );
+        // dstReceiver == address(this) => redirect to user's address
         if (desc.dstReceiver == address(this)) {
             if (address(desc.dstToken) == Native) {
                 payable(msg.sender).transfer(returnAmount);

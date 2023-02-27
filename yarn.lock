@@ -2434,7 +2434,7 @@
     "ajv" "^6.12.3"
     "har-schema" "^2.0.0"
 
-"hardhat-gas-reporter@^1.0.8":
+"hardhat-gas-reporter@^1.0.8", "hardhat-gas-reporter@^1.0.9":
   "integrity" "sha512-INN26G3EW43adGKBNzYWOlI3+rlLnasXTwW79YNnUhXPDa+yHESgt639dJEs37gCjhkbNKcRRJnomXEuMFBXJg=="
   "resolved" "https://registry.npmjs.org/hardhat-gas-reporter/-/hardhat-gas-reporter-1.0.9.tgz"
   "version" "1.0.9"
