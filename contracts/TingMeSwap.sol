@@ -13,45 +13,56 @@ import "./libraries/BytesLib.sol";
 /// This contract combines 1Inch and Stargate
 contract TingMeSwap is Ownable, Pausable {
     // Constants
-    address constant Native = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
-    uint256 constant MILLION = 10**6;
+    // Specific address stand for NativeAddress token
+    address private constant NativeAddress =
+        0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+    uint256 private constant MILLION = 10**6;
 
     // Variables
+    // Fee receiver
     address vault;
-    uint256 crosschainSwapFee; // tingme fees (per 1,000,000)
-    IAggregationRouterV5 swapRouter; // 1Inch router address
+
+    uint256 TingMeFee; // tingme fees (per 1,000,000)
+
+    IAggregationRouterV5 oneInchRouter; // 1Inch router address
     IStargateRouter stgRouter; // StarGate router
-    mapping(uint16 => IERC20) public poolToToken;
-    mapping(uint256 => bool) private isProcessed;
+    mapping(uint16 => IERC20) private poolIdToToken; // mapping StarGate poolId to its token
+    mapping(uint256 => bool) private isProcessedTx;
 
     // Events
     event Received(address indexed token, uint256 indexed amount);
 
+    // Errors
+    error Unauthorized();
+    error InsufficientBalance(uint256 available, uint256 required);
+    error WrongInput();
+    error InvalidAction();
+
     //
     constructor(
-        IAggregationRouterV5 _swapRouter,
+        IAggregationRouterV5 _oneInchRouter,
         IStargateRouter _stgRouter,
         uint256 _swapFee,
         address _vault
     ) {
-        swapRouter = _swapRouter;
+        oneInchRouter = _oneInchRouter;
         stgRouter = _stgRouter;
-        crosschainSwapFee = _swapFee;
+        TingMeFee = _swapFee;
         vault = _vault;
     }
 
     // Controller functions //
 
-    function changeSwapFee(uint256 _fee) external onlyOwner whenPaused {
-        crosschainSwapFee = _fee;
+    function changeTingMeFee(uint256 _fee) external onlyOwner whenPaused {
+        TingMeFee = _fee;
     }
 
-    function changeSwapRouter(IAggregationRouterV5 _router)
+    function changeOneInchRouter(IAggregationRouterV5 _router)
         external
         onlyOwner
         whenPaused
     {
-        swapRouter = _router;
+        oneInchRouter = _router;
     }
 
     function changeSTGRouter(IStargateRouter _router)
@@ -67,16 +78,27 @@ contract TingMeSwap is Ownable, Pausable {
     }
 
     function changePoolToken(uint16 poolId, IERC20 token) external onlyOwner {
-        poolToToken[poolId] = token;
+        poolIdToToken[poolId] = token;
+    }
+
+    function changeBatchPoolToken(Type.PoolData[] calldata pools)
+        external
+        onlyOwner
+    {
+        for (uint256 i; i < pools.length; ++i) {
+            poolIdToToken[pools[i].poolId] = pools[i].token;
+        }
     }
 
     function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
-        token.transfer(payable(msg.sender), amount);
-    }
-
-    function widthdraw(uint256 amount) external onlyOwner {
-        require(amount <= address(this).balance, "Not enough funds");
-        payable(msg.sender).transfer(amount);
+        if (address(token) == NativeAddress) {
+            if (amount > address(this).balance) {
+                revert InsufficientBalance(address(this).balance, amount);
+            }
+            payable(msg.sender).transfer(amount);
+        } else {
+            token.transfer(msg.sender, amount);
+        }
     }
 
     receive() external payable {}
@@ -97,136 +119,92 @@ contract TingMeSwap is Ownable, Pausable {
         return BytesLib.slice(data, 4, data.length - 4);
     }
 
-    // Logic functions //
-    function swapSingleChain(bytes calldata _data)
-        external
-        payable
-        whenNotPaused
-    {
-        (
-            IAggregationExecutor executor,
-            Type.SwapDescription memory desc,
-            bytes memory permit,
-            bytes memory data
-        ) = abi.decode(
-                _removeFunctionSelector(_data),
-                (IAggregationExecutor, Type.SwapDescription, bytes, bytes)
-            );
-        // EIP-20 token -> transfer and approve
-        if (address(desc.srcToken) != Native) {
-            desc.srcToken.transferFrom(msg.sender, address(this), desc.amount);
-            desc.srcToken.approve(address(swapRouter), desc.amount);
-        }
-        // 1InchSwap
-        (uint256 returnAmount, ) = swapRouter.swap{value: msg.value}(
-            executor,
-            desc,
-            permit,
-            data
-        );
-        // dstReceiver == address(this) => redirect to user's address
-        if (desc.dstReceiver == address(this)) {
-            if (address(desc.dstToken) == Native) {
-                payable(msg.sender).transfer(returnAmount);
-            } else {
-                desc.dstToken.transfer(msg.sender, returnAmount);
-            }
-        }
-    }
-
     function swapCrosschain(
-        Type.SrcData calldata srcData,
-        Type.DstData calldata dstData,
-        bytes calldata srcCallSwapData,
-        bytes calldata dstCallSwapData
+        Type.SrcData calldata srcChainData,
+        Type.DstData calldata dstChainData,
+        bytes calldata srcChainSwapData,
+        bytes calldata dstChainSwapData
     ) external payable whenNotPaused {
-        uint256 returnAmount = _preCrosschainProcess(srcData, srcCallSwapData);
+        IERC20 dstToken = poolIdToToken[srcChainData.poolId];
+        uint256 returnAmount = _singleChainProcess(
+            dstToken,
+            srcChainData.amountIn,
+            srcChainData.fee,
+            srcChainSwapData
+        );
         // approve pool token
         {
-            poolToToken[srcData.poolId].approve(
+            poolIdToToken[srcChainData.poolId].approve(
                 address(stgRouter),
                 returnAmount
             );
         }
 
         bytes memory data = abi.encode(
-            dstData.to,
-            dstData.slippage,
-            dstCallSwapData
+            dstChainData.to,
+            dstChainData.slippage,
+            dstChainSwapData
         );
 
-        stgRouter.swap{value: srcData.fee}(
-            dstData.chainId,
-            srcData.poolId,
-            dstData.poolId,
+        stgRouter.swap{value: srcChainData.fee}(
+            dstChainData.chainId,
+            srcChainData.poolId,
+            dstChainData.poolId,
             payable(msg.sender),
             returnAmount,
-            (returnAmount * srcData.slippage) / 100,
-            IStargateRouter.lzTxObj(dstData.dstFee, 0, "0x"),
-            abi.encodePacked(dstData.dstContract),
+            (returnAmount * srcChainData.slippage) / 100,
+            IStargateRouter.lzTxObj(dstChainData.dstFee, 0, "0x"),
+            abi.encodePacked(dstChainData.dstContract),
             data
         );
     }
 
-    function _preCrosschainProcess(
-        Type.SrcData calldata srcData,
-        bytes calldata srcCallSwapData
-    ) internal returns (uint256) {
-        if (srcCallSwapData.length == 0) {
-            // use pool token
-            poolToToken[srcData.poolId].transferFrom(
-                msg.sender,
-                address(this),
-                srcData.amountIn
-            );
-            return srcData.amountIn;
+    function _singleChainProcess(
+        IERC20 dstToken,
+        uint256 amountIn,
+        uint256 fee,
+        bytes calldata swapData
+    ) private returns (uint256) {
+        if (swapData.length == 0) {
+            // process destination token
+            dstToken.transferFrom(msg.sender, address(this), amountIn);
+            return amountIn;
         }
+        // Process distict tokens => use 1inch to swap
         // Decode data, ignore permit //
         (
-            IAggregationExecutor srcExecutor,
-            Type.SwapDescription memory srcDesc,
+            IAggregationExecutor executor,
+            Type.SwapDescription memory desc,
             ,
-            bytes memory srcExecuteData
+            bytes memory executeData
         ) = abi.decode(
-                srcCallSwapData[4:],
+                swapData[4:],
                 (IAggregationExecutor, Type.SwapDescription, bytes, bytes)
             );
-
         // scope validating in destination //
         {
-            require(
-                srcDesc.dstReceiver == address(this),
-                "Token needs to be transfered to contract"
-            );
-            require(
-                address(srcDesc.dstToken) ==
-                    address(poolToToken[srcData.poolId]),
-                "Target token in source chain should be supported"
-            );
+            if (
+                desc.dstReceiver != address(this) ||
+                address(desc.dstToken) != address(dstToken)
+            ) revert WrongInput();
         }
 
-        // Native, ERC20 process //
+        // NativeAddress, ERC20 process //
         uint256 nativeAmount = 0;
-        if (address(srcDesc.srcToken) == Native) {
-            nativeAmount = srcDesc.amount;
-            require(
-                nativeAmount + srcData.fee <= msg.value,
-                "Native should be enough"
-            );
+        if (address(desc.srcToken) == NativeAddress) {
+            nativeAmount = desc.amount;
+            if (nativeAmount + fee > msg.value)
+                revert InsufficientBalance(msg.value, nativeAmount + fee);
         } else {
-            srcDesc.srcToken.transferFrom(
-                msg.sender,
-                address(this),
-                srcDesc.amount
-            );
-            srcDesc.srcToken.approve(address(swapRouter), srcDesc.amount);
+            desc.srcToken.transferFrom(msg.sender, address(this), desc.amount);
+            desc.srcToken.approve(address(oneInchRouter), desc.amount);
         }
         // Swap source to pool token
-        (uint256 returnAmount, ) = swapRouter.swap{value: nativeAmount}(
-            srcExecutor,
-            srcDesc,
+        (uint256 returnAmount, ) = oneInchRouter.swap{value: nativeAmount}(
+            executor,
+            desc,
             "",
-            srcExecuteData
+            executeData
         );
         return returnAmount;
     }
@@ -245,14 +223,11 @@ contract TingMeSwap is Ownable, Pausable {
         uint256 amount,
         bytes calldata payload
     ) external payable {
-        require(
-            msg.sender == address(stgRouter),
-            "Only stargate router can call sgReceive!"
-        );
-        require(isProcessed[nonce], "This transaction would be processed");
+        if (msg.sender != address(stgRouter)) revert Unauthorized();
+        if (isProcessedTx[nonce]) revert InvalidAction();
 
         // Process Fee //
-        uint256 fee = (amount / MILLION) * crosschainSwapFee;
+        uint256 fee = (amount / MILLION) * TingMeFee;
         if (fee > 0) {
             IERC20(token).transfer(vault, fee);
             amount -= fee;
@@ -279,18 +254,18 @@ contract TingMeSwap is Ownable, Pausable {
                     _removeFunctionSelector(callSwapData),
                     (IAggregationExecutor, Type.SwapDescription, bytes, bytes)
                 );
-            // if wrong dstData -> transfer pool token to receiver
+            // if wrong dstChainData -> transfer pool token to receiver
             if (address(desc.srcToken) != token) {
                 IERC20(token).transfer(to, amount);
                 emit Received(token, amount);
             }
             //
             else {
-                desc.srcReceiver = payable(address(this));
+                desc.srcReceiver = payable(to);
                 desc.dstReceiver = payable(to);
                 desc.amount = amount;
                 desc.minReturnAmount = (amount / MILLION) * slippage;
-                (uint256 returnAmount, ) = swapRouter.swap(
+                (uint256 returnAmount, ) = oneInchRouter.swap(
                     executor,
                     desc,
                     "",

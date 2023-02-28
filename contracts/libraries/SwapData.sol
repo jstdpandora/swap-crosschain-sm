@@ -14,19 +14,24 @@ library Type {
     }
 
     struct SrcData {
-        uint16 poolId;
         uint8 slippage;
+        uint16 poolId;
         uint256 amountIn;
         uint256 amountOutMin;
         uint256 fee;
     }
 
     struct DstData {
-        uint16 poolId;
         uint8 slippage;
+        uint16 poolId;
         uint16 chainId;
         uint256 dstFee;
         address dstContract;
         address to;
+    }
+
+    struct PoolData {
+        uint16 poolId;
+        IERC20 token;
     }
 }

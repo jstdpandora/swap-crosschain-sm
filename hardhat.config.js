@@ -16,7 +16,7 @@ module.exports = {
       viaIR: true,
       optimizer: {
         enabled: true,
-        runs: 50,
+        runs: 100,
       },
     },
   },
