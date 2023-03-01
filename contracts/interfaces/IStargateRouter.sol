@@ -9,6 +9,14 @@ interface IStargateRouter {
         bytes dstNativeAddr;
     }
 
+    function quoteLayerZeroFee(
+        uint16 _dstChainId,
+        uint8 _functionType,
+        bytes calldata _toAddress,
+        bytes calldata _transferAndCallPayload,
+        lzTxObj memory _lzTxParams
+    ) external view returns (uint256, uint256);
+
     function swap(
         uint16 _dstChainId,
         uint256 _srcPoolId,

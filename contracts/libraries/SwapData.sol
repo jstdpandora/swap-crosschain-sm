@@ -13,19 +13,18 @@ library Type {
         uint256 flags;
     }
 
-    struct SrcData {
-        uint8 slippage;
+    struct SrcChainData {
         uint16 poolId;
+        uint32 slippage;
         uint256 amountIn;
-        uint256 amountOutMin;
         uint256 fee;
     }
 
-    struct DstData {
-        uint8 slippage;
+    struct DstChainData {
         uint16 poolId;
         uint16 chainId;
-        uint256 dstFee;
+        uint32 slippage;
+        uint32 dstFee; // gas unit
         address dstContract;
         address to;
     }

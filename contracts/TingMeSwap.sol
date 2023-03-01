@@ -6,7 +6,6 @@ import "./interfaces/IAggregationRouterV5.sol";
 import "./interfaces/IStargateRouter.sol";
 import "./access/Ownable.sol";
 import "./security/Pausable.sol";
-import "hardhat/console.sol";
 import "./libraries/SwapData.sol";
 import "./libraries/BytesLib.sol";
 
@@ -16,7 +15,7 @@ contract TingMeSwap is Ownable, Pausable {
     // Specific address stand for NativeAddress token
     address private constant NativeAddress =
         0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
-    uint256 private constant MILLION = 10**6;
+    uint32 private constant MILLION = 1_000_000;
 
     // Variables
     // Fee receiver
@@ -120,8 +119,8 @@ contract TingMeSwap is Ownable, Pausable {
     }
 
     function swapCrosschain(
-        Type.SrcData calldata srcChainData,
-        Type.DstData calldata dstChainData,
+        Type.SrcChainData calldata srcChainData,
+        Type.DstChainData calldata dstChainData,
         bytes calldata srcChainSwapData,
         bytes calldata dstChainSwapData
     ) external payable whenNotPaused {
@@ -145,14 +144,16 @@ contract TingMeSwap is Ownable, Pausable {
             dstChainData.slippage,
             dstChainSwapData
         );
-
+        if (srcChainData.slippage > MILLION / 2) {
+            revert WrongInput();
+        }
         stgRouter.swap{value: srcChainData.fee}(
             dstChainData.chainId,
             srcChainData.poolId,
             dstChainData.poolId,
             payable(msg.sender),
             returnAmount,
-            (returnAmount * srcChainData.slippage) / 100,
+            ((returnAmount * (MILLION - srcChainData.slippage)) / MILLION),
             IStargateRouter.lzTxObj(dstChainData.dstFee, 0, "0x"),
             abi.encodePacked(dstChainData.dstContract),
             data
@@ -225,18 +226,17 @@ contract TingMeSwap is Ownable, Pausable {
     ) external payable {
         if (msg.sender != address(stgRouter)) revert Unauthorized();
         if (isProcessedTx[nonce]) revert InvalidAction();
-
         // Process Fee //
-        uint256 fee = (amount / MILLION) * TingMeFee;
-        if (fee > 0) {
+        if (TingMeFee > 0) {
+            uint256 fee = (amount / MILLION) * TingMeFee;
             IERC20(token).transfer(vault, fee);
             amount -= fee;
         }
 
         // decode payload //
-        (address to, uint8 slippage, bytes memory callSwapData) = abi.decode(
+        (address to, uint32 slippage, bytes memory callSwapData) = abi.decode(
             payload,
-            (address, uint8, bytes)
+            (address, uint32, bytes)
         );
         // check swap //
         if (callSwapData.length == 0) {
@@ -261,10 +261,14 @@ contract TingMeSwap is Ownable, Pausable {
             }
             //
             else {
-                desc.srcReceiver = payable(to);
                 desc.dstReceiver = payable(to);
                 desc.amount = amount;
-                desc.minReturnAmount = (amount / MILLION) * slippage;
+                if (slippage > MILLION / 2) slippage = MILLION / 2;
+                desc.srcToken.approve(address(oneInchRouter), amount);
+                desc.minReturnAmount =
+                    (desc.minReturnAmount * (MILLION - slippage)) /
+                    MILLION;
+
                 (uint256 returnAmount, ) = oneInchRouter.swap(
                     executor,
                     desc,

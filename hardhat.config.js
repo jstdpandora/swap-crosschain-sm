@@ -2,7 +2,6 @@ require("@nomicfoundation/hardhat-toolbox");
 require("dotenv").config();
 require("hardhat-gas-reporter");
 
-/** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
   gasReporter: {
     enabled: process.env.REPORT_GAS ? true : false,
@@ -16,9 +15,12 @@ module.exports = {
       viaIR: true,
       optimizer: {
         enabled: true,
-        runs: 100,
+        runs: 300,
       },
     },
+  },
+  mocha: {
+    timeout: 100000000,
   },
   networks: {
     hardhat: {
