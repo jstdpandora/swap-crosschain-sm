@@ -14,7 +14,7 @@ library Type {
     }
 
     struct SrcChainData {
-        uint16 poolId;
+        uint16 poolId; // stg poolId
         uint32 slippage;
         uint256 amountIn;
         uint256 fee;

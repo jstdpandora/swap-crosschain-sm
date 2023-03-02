@@ -18,18 +18,17 @@ contract TingMeSwap is Ownable, Pausable {
     uint32 private constant MILLION = 1_000_000;
 
     // Variables
-    // Fee receiver
-    address vault;
-
     uint256 TingMeFee; // tingme fees (per 1,000,000)
 
-    IAggregationRouterV5 oneInchRouter; // 1Inch router address
-    IStargateRouter stgRouter; // StarGate router
-    mapping(uint16 => IERC20) private poolIdToToken; // mapping StarGate poolId to its token
+    address vault; // TingMeFee receiver
+
+    IAggregationRouterV5 oneInchRouter; // 1Inch router
+    IStargateRouter stgRouter; // Stargate router
+    mapping(uint16 => IERC20) private poolIdToToken; // mapping Stargate poolId to its token
     mapping(uint256 => bool) private isProcessedTx;
 
     // Events
-    event Received(address indexed token, uint256 indexed amount);
+    event Received(address indexed token, uint256 indexed amount); // emit event when user received destination token
 
     // Errors
     error Unauthorized();
@@ -41,21 +40,25 @@ contract TingMeSwap is Ownable, Pausable {
     constructor(
         IAggregationRouterV5 _oneInchRouter,
         IStargateRouter _stgRouter,
-        uint256 _swapFee,
+        uint256 _TingMeFee,
         address _vault
     ) {
         oneInchRouter = _oneInchRouter;
         stgRouter = _stgRouter;
-        TingMeFee = _swapFee;
+        TingMeFee = _TingMeFee;
         vault = _vault;
     }
 
     // Controller functions //
 
+    /// @notice This function changes contract's fee
+    /// @param _fee: new fee
     function changeTingMeFee(uint256 _fee) external onlyOwner whenPaused {
         TingMeFee = _fee;
     }
 
+    /// @notice This function changes 1Inch router
+    /// @param _router: new router address
     function changeOneInchRouter(IAggregationRouterV5 _router)
         external
         onlyOwner
@@ -64,6 +67,8 @@ contract TingMeSwap is Ownable, Pausable {
         oneInchRouter = _router;
     }
 
+    /// @notice This function changes Stargate router
+    /// @param _router: new router address
     function changeSTGRouter(IStargateRouter _router)
         external
         onlyOwner
@@ -72,14 +77,18 @@ contract TingMeSwap is Ownable, Pausable {
         stgRouter = _router;
     }
 
+    /// @notice This function changes fee vault address
+    /// @param _vault: new vault address
     function changeVault(address _vault) external onlyOwner whenPaused {
         vault = _vault;
     }
 
+    /// @notice This function add new or update token-poolId mapping (based on Stargate)
     function changePoolToken(uint16 poolId, IERC20 token) external onlyOwner {
         poolIdToToken[poolId] = token;
     }
 
+    /// @notice This function add new or update token-poolId mapping in batch (based on Stargate)
     function changeBatchPoolToken(Type.PoolData[] calldata pools)
         external
         onlyOwner
@@ -89,7 +98,8 @@ contract TingMeSwap is Ownable, Pausable {
         }
     }
 
-    function rescueFunds(IERC20 token, uint256 amount) external onlyOwner {
+    /// @notice Owner can withdraw any tokens from this contract
+    function ownerWithdraw(IERC20 token, uint256 amount) external onlyOwner {
         if (address(token) == NativeAddress) {
             if (amount > address(this).balance) {
                 revert InsufficientBalance(address(this).balance, amount);
@@ -100,6 +110,7 @@ contract TingMeSwap is Ownable, Pausable {
         }
     }
 
+    /// allow anyone to send native token to this contract
     receive() external payable {}
 
     function unpause() external onlyOwner {
@@ -118,6 +129,12 @@ contract TingMeSwap is Ownable, Pausable {
         return BytesLib.slice(data, 4, data.length - 4);
     }
 
+    /// @notice This function helps to create a cross chain transaction on Source Chain
+    /// @dev call 1Inch API first to give srcChainSwapData and dstChainSwapData
+    /// @param srcChainData: some parameter in source chain, include Stargate PoolId, swap gas fee and others
+    /// @param dstChainData: some parameter in destination chain, include Stargate poolId, destination contract, remote receiver and others
+    /// @param srcChainSwapData: 1Inch swap data on source chain (swap from others to stg pool token, from user to this contract)
+    /// @param dstChainSwapData: 1Inch swap data on destination chain (swap from stg pool token to destination token. user is receiver)
     function swapCrosschain(
         Type.SrcChainData calldata srcChainData,
         Type.DstChainData calldata dstChainData,
@@ -160,6 +177,13 @@ contract TingMeSwap is Ownable, Pausable {
         );
     }
 
+    /// @notice Explain to an end user what this does
+    /// @dev Explain to a developer any extra details
+    /// @param dstToken: destination token
+    /// @param amountIn: number of token in
+    /// @param fee: fee in native token
+    /// @param swapData: 1Inch data
+    /// @return amount of token Out
     function _singleChainProcess(
         IERC20 dstToken,
         uint256 amountIn,
@@ -171,7 +195,7 @@ contract TingMeSwap is Ownable, Pausable {
             dstToken.transferFrom(msg.sender, address(this), amountIn);
             return amountIn;
         }
-        // Process distict tokens => use 1inch to swap
+        // Process others => use 1inch to swap
         // Decode data, ignore permit //
         (
             IAggregationExecutor executor,
