@@ -13,20 +13,19 @@ library Type {
         uint256 flags;
     }
 
-    struct SrcChainData {
-        uint16 poolId; // stg poolId
-        uint32 slippage;
-        uint256 amountIn;
-        uint256 fee;
+    struct StgData {
+        uint16 srcChainPoolId;
+        uint16 dstChainPoolId;
+        uint16 dstChainId;
+        uint32 dstChainGasUnit;
+        uint256 totalGasFee;
     }
 
-    struct DstChainData {
-        uint16 poolId;
-        uint16 chainId;
+    struct TxData {
         uint32 slippage;
-        uint32 dstFee; // gas unit
-        address dstContract;
-        address to;
+        address receiver;
+        uint256 amountIn;
+        address dstChainTingMeContract;
     }
 
     struct PoolData {

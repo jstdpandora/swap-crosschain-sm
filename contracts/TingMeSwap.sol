@@ -18,9 +18,9 @@ contract TingMeSwap is Ownable, Pausable {
     uint32 private constant MILLION = 1_000_000;
 
     // Variables
-    uint256 TingMeFee; // tingme fees (per 1,000,000)
+    uint256 tingMeFee; // tingme fees (per 1,000,000)
 
-    address vault; // TingMeFee receiver
+    address vault; // tingMeFee receiver
 
     IAggregationRouterV5 oneInchRouter; // 1Inch router
     IStargateRouter stgRouter; // Stargate router
@@ -40,12 +40,12 @@ contract TingMeSwap is Ownable, Pausable {
     constructor(
         IAggregationRouterV5 _oneInchRouter,
         IStargateRouter _stgRouter,
-        uint256 _TingMeFee,
+        uint256 _tingMeFee,
         address _vault
     ) {
         oneInchRouter = _oneInchRouter;
         stgRouter = _stgRouter;
-        TingMeFee = _TingMeFee;
+        tingMeFee = _tingMeFee;
         vault = _vault;
     }
 
@@ -53,8 +53,8 @@ contract TingMeSwap is Ownable, Pausable {
 
     /// @notice This function changes contract's fee
     /// @param _fee: new fee
-    function changeTingMeFee(uint256 _fee) external onlyOwner whenPaused {
-        TingMeFee = _fee;
+    function changetingMeFee(uint256 _fee) external onlyOwner whenPaused {
+        tingMeFee = _fee;
     }
 
     /// @notice This function changes 1Inch router
@@ -131,54 +131,53 @@ contract TingMeSwap is Ownable, Pausable {
 
     /// @notice This function helps to create a cross chain transaction on Source Chain
     /// @dev call 1Inch API first to give srcChainSwapData and dstChainSwapData
-    /// @param srcChainData: some parameter in source chain, include Stargate PoolId, swap gas fee and others
-    /// @param dstChainData: some parameter in destination chain, include Stargate poolId, destination contract, remote receiver and others
+    /// @param txData: basic data to execute tx
+    /// @param stgData: data to use stargate
     /// @param srcChainSwapData: 1Inch swap data on source chain (swap from others to stg pool token, from user to this contract)
     /// @param dstChainSwapData: 1Inch swap data on destination chain (swap from stg pool token to destination token. user is receiver)
     function swapCrosschain(
-        Type.SrcChainData calldata srcChainData,
-        Type.DstChainData calldata dstChainData,
+        Type.TxData calldata txData,
+        Type.StgData calldata stgData,
         bytes calldata srcChainSwapData,
         bytes calldata dstChainSwapData
     ) external payable whenNotPaused {
-        IERC20 dstToken = poolIdToToken[srcChainData.poolId];
+        if (txData.slippage > MILLION / 2) {
+            revert WrongInput();
+        }
+        IERC20 dstToken = poolIdToToken[stgData.srcChainPoolId];
         uint256 returnAmount = _singleChainProcess(
             dstToken,
-            srcChainData.amountIn,
-            srcChainData.fee,
+            txData.amountIn,
+            stgData.totalGasFee,
             srcChainSwapData
         );
         // approve pool token
         {
-            poolIdToToken[srcChainData.poolId].approve(
+            poolIdToToken[stgData.srcChainPoolId].approve(
                 address(stgRouter),
                 returnAmount
             );
         }
 
         bytes memory data = abi.encode(
-            dstChainData.to,
-            dstChainData.slippage,
+            txData.receiver,
+            txData.slippage,
             dstChainSwapData
         );
-        if (srcChainData.slippage > MILLION / 2) {
-            revert WrongInput();
-        }
-        stgRouter.swap{value: srcChainData.fee}(
-            dstChainData.chainId,
-            srcChainData.poolId,
-            dstChainData.poolId,
+
+        stgRouter.swap{value: stgData.totalGasFee}(
+            stgData.dstChainId,
+            stgData.srcChainPoolId,
+            stgData.dstChainPoolId,
             payable(msg.sender),
             returnAmount,
-            ((returnAmount * (MILLION - srcChainData.slippage)) / MILLION),
-            IStargateRouter.lzTxObj(dstChainData.dstFee, 0, "0x"),
-            abi.encodePacked(dstChainData.dstContract),
+            ((returnAmount * (MILLION - txData.slippage)) / MILLION),
+            IStargateRouter.lzTxObj(stgData.dstChainGasUnit, 0, "0x"),
+            abi.encodePacked(txData.dstChainTingMeContract),
             data
         );
     }
 
-    /// @notice Explain to an end user what this does
-    /// @dev Explain to a developer any extra details
     /// @param dstToken: destination token
     /// @param amountIn: number of token in
     /// @param fee: fee in native token
@@ -248,11 +247,11 @@ contract TingMeSwap is Ownable, Pausable {
         uint256 amount,
         bytes calldata payload
     ) external payable {
-        if (msg.sender != address(stgRouter)) revert Unauthorized();
+        // if (msg.sender != address(stgRouter)) revert Unauthorized();
         if (isProcessedTx[nonce]) revert InvalidAction();
         // Process Fee //
-        if (TingMeFee > 0) {
-            uint256 fee = (amount / MILLION) * TingMeFee;
+        if (tingMeFee > 0) {
+            uint256 fee = (amount / MILLION) * tingMeFee;
             IERC20(token).transfer(vault, fee);
             amount -= fee;
         }
