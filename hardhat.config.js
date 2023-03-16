@@ -22,11 +22,13 @@ module.exports = {
   mocha: {
     timeout: 100000000,
   },
+  etherscan: {
+    apiKey: "PP1ZDPFX8RCDDDY6RBK15I1EDQM4SKJZ3N",
+  },
   networks: {
-    hardhat: {
-      forking: {
-        url: `https://eth-mainnet.alchemyapi.io/v2/${process.env.ALCHEMY_API_KEY}`,
-      },
+    sepolia: {
+      url: `https://eth-sepolia.g.alchemy.com/v2/${process.env.ALCHEMY_SEPOLIA_KEY}`,
+      accounts: [process.env.PRIVATE_KEY],
     },
   },
 };

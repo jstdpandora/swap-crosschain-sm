@@ -53,27 +53,23 @@ contract TingMeSwap is Ownable, Pausable {
 
     /// @notice This function changes contract's fee
     /// @param _fee: new fee
-    function changetingMeFee(uint256 _fee) external onlyOwner whenPaused {
+    function changeTingMeFee(uint256 _fee) external onlyOwner whenPaused {
         tingMeFee = _fee;
     }
 
     /// @notice This function changes 1Inch router
     /// @param _router: new router address
-    function changeOneInchRouter(IAggregationRouterV5 _router)
-        external
-        onlyOwner
-        whenPaused
-    {
+    function changeOneInchRouter(
+        IAggregationRouterV5 _router
+    ) external onlyOwner whenPaused {
         oneInchRouter = _router;
     }
 
     /// @notice This function changes Stargate router
     /// @param _router: new router address
-    function changeSTGRouter(IStargateRouter _router)
-        external
-        onlyOwner
-        whenPaused
-    {
+    function changeSTGRouter(
+        IStargateRouter _router
+    ) external onlyOwner whenPaused {
         stgRouter = _router;
     }
 
@@ -84,15 +80,17 @@ contract TingMeSwap is Ownable, Pausable {
     }
 
     /// @notice This function add new or update token-poolId mapping (based on Stargate)
-    function changePoolToken(uint16 poolId, IERC20 token) external onlyOwner {
+    function changePoolToken(
+        uint16 poolId,
+        IERC20 token
+    ) external onlyOwner whenPaused {
         poolIdToToken[poolId] = token;
     }
 
     /// @notice This function add new or update token-poolId mapping in batch (based on Stargate)
-    function changeBatchPoolToken(Type.PoolData[] calldata pools)
-        external
-        onlyOwner
-    {
+    function changeBatchPoolToken(
+        Type.PoolData[] calldata pools
+    ) external onlyOwner whenPaused {
         for (uint256 i; i < pools.length; ++i) {
             poolIdToToken[pools[i].poolId] = pools[i].token;
         }
@@ -121,11 +119,9 @@ contract TingMeSwap is Ownable, Pausable {
         _pause();
     }
 
-    function _removeFunctionSelector(bytes memory data)
-        internal
-        pure
-        returns (bytes memory)
-    {
+    function _removeFunctionSelector(
+        bytes memory data
+    ) internal pure returns (bytes memory) {
         return BytesLib.slice(data, 4, data.length - 4);
     }
 
@@ -247,7 +243,7 @@ contract TingMeSwap is Ownable, Pausable {
         uint256 amount,
         bytes calldata payload
     ) external payable {
-        // if (msg.sender != address(stgRouter)) revert Unauthorized();
+        if (msg.sender != address(stgRouter)) revert Unauthorized();
         if (isProcessedTx[nonce]) revert InvalidAction();
         // Process Fee //
         if (tingMeFee > 0) {
